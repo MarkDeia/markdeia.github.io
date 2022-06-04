@@ -1,0 +1,643 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+    <id>https://markdeia.github.io</id>
+    <title>Mark&apos;s Blog</title>
+    <updated>2022-06-04T21:11:10.142Z</updated>
+    <generator>https://github.com/jpmonette/feed</generator>
+    <link rel="alternate" href="https://markdeia.github.io"/>
+    <link rel="self" href="https://markdeia.github.io/atom.xml"/>
+    <subtitle>开啥玩笑呢</subtitle>
+    <logo>https://markdeia.github.io/images/avatar.png</logo>
+    <icon>https://markdeia.github.io/favicon.ico</icon>
+    <rights>All rights reserved 2022, Mark&apos;s Blog</rights>
+    <entry>
+        <title type="html"><![CDATA[NVIDIA Jetson Nano 折腾记]]></title>
+        <id>https://markdeia.github.io/post/jetson-nano-setting-up/</id>
+        <link href="https://markdeia.github.io/post/jetson-nano-setting-up/">
+        </link>
+        <updated>2022-06-04T20:00:48.000Z</updated>
+        <content type="html"><![CDATA[<p>本文介绍jetson nano 从入手到跑模型的流程一些记录，包括自己踩的很多坑，以供后人和自己查阅。</p>
+<h1 id="硬件配置">硬件配置</h1>
+<p>我这里的nano（b01）是国产版本，是以emmc（内置闪存）进行启动的，容量只有16GiB。<br>
+这是我的附加配件：</p>
+<ul>
+<li>512GiB的m.2 nvme硬盘（后期空间开销真的很大，用于挂载到根目录，emmc的16G绝对不够） *1</li>
+<li>2.4/5Ghz 双频无线网卡 板载 支持MIMO（理论最大速度867Mbps）*1</li>
+<li>32GiB SanDisk UHS-I microSD卡 *1</li>
+<li>5dBi无线网卡天线 *2</li>
+</ul>
+<h1 id="安装系统">安装系统</h1>
+<p>拆开主板的静电袋，首先就是把系统给装上。使用虚拟机安装Ubuntu18.04（理论上更高也没问题），安装<a href="https://developer.nvidia.com/nvidia-sdk-manager">NVIDIA SDK manager</a>，让jetson进入恢复模式，连接到虚拟机上的SDK manager，静候烧录，用时大概一两个小时左右吧，这里厂家应该有指导文件，就不细说了。<br>
+这里我选择先烧录系统，于是遇上了第一个坑：<br>
+如果先烧录系统，后连接到SDK manager下载NVIDIA的组件，<strong>请将系统语言保持英文</strong>，否则会出现：<br>
+<img src="https://markdeia.github.io/post-images/1654374020371.png" alt="" loading="lazy"><br>
+安装NVIDIA组件的时候最好先在nano上换源（中科大、清华等等），要不然也容易卡在第三个检查步骤。</p>
+<h1 id="安装设备树驱动">安装设备树（驱动）</h1>
+<p>请遵循厂家说明文件 我这里需要挂载的是外置SD读写器<br>
+将你的dtb文件复制到/boot目录下<br>
+<code>sudo cp filename.dtb /boot</code><br>
+编辑/boot/extlinux/extlinux.conf配置文件<br>
+<code>sudo gedit /boot/extlinux/extlinux.conf</code></p>
+<p>在<code>INITRD /boot/initrd</code>下面增加这一行内容<br>
+<code>FDT /boot/filename.dtb</code></p>
+<h1 id="将系统迁移到-nvme硬盘sdcard-上">将系统迁移到 NVME硬盘/SDcard 上</h1>
+<p>NVMe SSD 硬盘仅作为系统盘（rootfs 和用户区），系统的启动引导依然是通过EMMC，比如升级设备树dtb 还是在 SD 卡或 EMMC 中。</p>
+<h2 id="格式化硬盘sdcard">格式化硬盘/SDcard</h2>
+<p>打开 Ubuntu18.04 自带 Disks 工具，找到安装的 ssd 硬盘,首先按键&quot;Ctrl+F”将其快速格式化为ext4格式，<img src="https://markdeia.github.io/post-images/1654374598715.png" alt="" loading="lazy"><br>
+<img src="https://markdeia.github.io/post-images/1654374676911.png" alt="" loading="lazy"><br>
+点击三角符号挂载<img src="https://markdeia.github.io/post-images/1654374702441.png" alt="" loading="lazy"></p>
+<h2 id="克隆rootonnvme项目">克隆rootOnNVMe项目</h2>
+<p><code>git clone https://github.com/jetsonhacks/rootOnNVMe.git</code><br>
+修改 rootOnNVME 文件中的以下三个文件:<br>
+copy-rootfs-ssd.sh<br>
+data/setssdroot.sh<br>
+data/setssdroot.service 需要将以上三个文件中对应的设备号/dev/nvme0n1p1 修改为Disks工具中，硬盘/SD卡 对应的设备号/dev/******，其他无需更改，执行脚本开始迁移系统。<br>
+<code>./copy-rootfs-ssd.sh</code><br>
+<code>./setup-service.sh</code><br>
+重启设备<br>
+<code>sudo reboot</code><br>
+重启后通过命令 <code>df -h</code> 查看 ssd 或者 sd 卡是否挂载在系统/(根目录)来判断操作是否成功，当然也可以直接在设置中查看系统详情的硬盘大小来确认。</p>
+<h1 id="安装远程桌面">安装远程桌面</h1>
+<p>这里我推荐xRDP，VNC不推荐，因为纯远程启动折腾起来非常麻烦。</p>
+<pre><code>sudo apt install xrdp
+sudo apt install xfce4 xfce4-terminal
+# 向xsession中写入xfce4-session
+echo &quot;xfce4-session&quot; &gt;~/.xsession
+# 设置配置文件
+sudo vim /etc/xrdp/startwm.sh
+</code></pre>
+<p>在<code>. /etc/X11/Xsession</code>前面加<br>
+<code>xfce4-session</code><br>
+如图所示：<img src="https://img-blog.csdnimg.cn/1a6c969bd67a4bb4ac7a66bfe8b2a215.png" alt="" loading="lazy"><br>
+最后<br>
+<code>sudo systemctl enable xrdp</code><br>
+打开Windows远程桌面mstsc，输入远程ubuntu的IP地址，进行远程连接。<br>
+xfce4应该无法使用原生的terminal，你可以把Applications-Settings-Preferred Applilcations，打开Preferred Applilcations后，选择Utilities，修改Terminal Emulator，由于我使用的是xfce4桌面，因此选择了xfce Terminal</p>
+<h2 id="调整-xrdp-配置参数">调整 Xrdp 配置参数</h2>
+<p>编辑 <code>/etc/xrdp/xrdp.ini</code></p>
+<pre><code>tcp_send_buffer_bytes=116777216
+tcp_recv_buffer_bytes=116777216
+</code></pre>
+<p>将以下内容写入配置文件 <code>/etc/sysctl.conf</code>末尾</p>
+<pre><code>net.core.rmem_max = 12582912
+net.core.wmem_max = 8388608
+</code></pre>
+<p>然后执行<code>sudo sysctl -p</code></p>
+<h2 id="重启-xrdp-服务生效">重启 xrdp 服务生效</h2>
+<p><code>sudo systemctl restart xrdp</code></p>
+<h1 id="apt换国内源">apt换国内源</h1>
+<pre><code>#添加root密码
+sudo passwd root
+#备份存nano源原文件
+sudo cp /etc/apt/sources.list /etc/apt/sources.list.bak
+#编辑该文件
+sudo vi /etc/apt/sources.list
+
+#拷贝到文件中
+deb http://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports/ bionic main multiverse restricted universe
+deb http://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports/ bionic-security main multiverse restricted universe
+deb http://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports/ bionic-updates main multiverse restricted universe
+deb http://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports/ bionic-backports main multiverse restricted universe
+deb-src http://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports/ bionic main multiverse restricted universe
+deb-src http://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports/ bionic-security main multiverse restricted universe
+deb-src http://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports/ bionic-updates main multiverse restricted universe
+deb-src http://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports/ bionic-backports main multiverse restricted universe
+#更新下源
+sudo apt-get update    
+    
+#更新下软件
+sudo apt-get full-upgrade  
+
+</code></pre>
+<h1 id="检查cuda-cudnn-opencv-是否安装完整">检查CUDA CUDNN OpenCV 是否安装完整</h1>
+<h2 id="cuda-的配置">CUDA 的配置</h2>
+<pre><code>#查看是否正确 
+nvcc -V
+</code></pre>
+<p>显示如下图配置正确：<br>
+<img src="https://img-blog.csdnimg.cn/2020072520055372.png#pic_center" alt="" loading="lazy"></p>
+<h2 id="检查cudnn">检查CUDNN</h2>
+<p>刚刚在SDK manager中我们已经安装好了cuda及cudnn，运行下mnist案例验证下cudnn是否可用。</p>
+<pre><code>#进入案例文件
+cd /usr/src/cudnn_samples_v8/mnistCUDNN/mnistCUDNN
+#编译一下例子
+sudo make 
+# 为可执行文件添加执行权限
+sudo chmod a+x mnistCUDNN 
+#运行测试
+./mnistCUDNN
+</code></pre>
+<p>运行成功为最后显示检测结果为：1 3 5</p>
+<h2 id="检查opencv">检查OpenCV</h2>
+<p>python3下查看Opencv正常使用及版本</p>
+<pre><code>import cv2
+print（cv2.__version__）
+</code></pre>
+<h1 id="安装conda">安装Conda</h1>
+<p>由于Jetson为aarch64架构，目前不支持annconda；这里<a href="https://github.com/conda-forge/miniforge/releases">miniforge</a>和annconda使用方式基本一致。</p>
+<pre><code>#上面官网链接下载
+Mambaforge-4.9.2-7-Linux-aarch64.sh
+#直接运行安装脚本；安装过程回有几个选项：要么回车要么yes。
+sh ./Mambaforge-4.9.2-7-Linux-aarch64.sh
+vim  ~/.bashrc
+#最后面添加如下内容：
+alias sudo=&quot;sudo env PATH=$PATH&quot;
+#退出更新变量
+source ~/.bashrc
+#这是配置进入终端直接 是conda的base环境  false是关闭
+conda config --set auto_activate_base false
+</code></pre>
+<h1 id="安装pinyinpippython3变更为默认">安装pinyin,pip,python3变更为默认</h1>
+<h2 id="需要ssh传输文件需要安装lrzsz">需要ssh传输文件，需要安装lrzsz。</h2>
+<p><code>sudo apt-get install lrzsz</code></p>
+<h2 id="语言支持选择汉语图形界面下使用不需要可不装">语言支持选择汉语（图形界面下使用，不需要可不装）</h2>
+<pre><code>sudo apt-get install ibus-pinyin
+reboot
+</code></pre>
+<p>安装pip，pip更换阿里源（这里是本机原本的python环境）</p>
+<pre><code>sudo apt-get install python3-pip
+
+pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/
+
+python -m pip install --upgrade pip
+</code></pre>
+<p>自带python2与python3，将Python3设置为默认。</p>
+<pre><code>sudo update-alternatives --install /usr/bin/python python /usr/bin/python2 100
+sudo update-alternatives --install /usr/bin/python python /usr/bin/python3 150
+python --version
+ #显示为3.x.x就说明切换成功
+Python 3.6.5
+</code></pre>
+<h1 id="swap交换空间增加">Swap交换空间增加</h1>
+<p>Jetson Nano 内存为4G，显存与内存共用机制。使交换空间为12G，解决一些耗尽内存的程序出错（比如说编译。依次输入以下命令，并使其永久生效。</p>
+<pre><code>sudo fallocate -l 12G /var/swapfile
+sudo chmod 600 /var/swapfile
+sudo mkswap /var/swapfile
+sudo swapon /var/swapfile
+sudo bash -c 'echo &quot;/var/swapfile swap swap defaults 0 0&quot; &gt;&gt; /etc/fstab'
+</code></pre>
+]]></content>
+    </entry>
+    <entry>
+        <title type="html"><![CDATA[模拟退火算法(Simulated Annealing)——简析]]></title>
+        <id>https://markdeia.github.io/post/simulated-annealing/</id>
+        <link href="https://markdeia.github.io/post/simulated-annealing/">
+        </link>
+        <updated>2022-01-20T16:27:25.000Z</updated>
+        <content type="html"><![CDATA[<h2 id="什么是模拟退火算法">什么是模拟退火算法？</h2>
+<p>模拟退火算法，（英语：Simulated annealing，缩写作SA）是一种通用概率算法，常用来在一定时间内寻找在一个很大搜寻空间中的近似最优解。通过模拟物理上退火方法，经过N次迭代（退火），逼近函数的上的一个最值（最大或者最小值）。<br>
+比如逼近这个函数的最大值A点：<br>
+<img src="https://markdeia.github.io/post-images/1642700072183.png" alt="" loading="lazy"><br>
+模拟退火算法与初始值无关，算法求得的解与初始解状态S（是算法迭代的起点）无关；模拟退火算法具有渐近收敛性，已在理论上被证明是一种以概率1收敛于全局最优解的全局优化算法；模拟退火算法具有并行性。（看不懂无所谓）</p>
+<h2 id="模拟退火是怎么来的">模拟退火是怎么来的？</h2>
+<p>模拟退火算法的思想借鉴于固体的退火原理，退火是将材料加热后再经特定速率冷却，目的是增大晶粒的体积，并且减少晶格中的缺陷。材料中的原子原来会停留在使内能有局部最小值的位置，加热使能量变大，原子会离开原来位置，而随机在其他位置中移动。退火冷却时速度较慢，使得原子有较多可能可以找到内能比原先更低的位置。<br>
+<img src="https://dingyue.ws.126.net/2021/0807/4023e9b7p00qxftq900icd200u000nrg00it00ev.png" alt="退火" loading="lazy"><br>
+模拟退火的原理也和金属退火的原理近似：我们将热力学的理论套用到统计学上，将搜寻空间内每一点想像成空气内的分子；分子的能量，就是它本身的动能；而搜寻空间内的每一点，也像空气分子一样带有“能量”，以表示该点对命题的合适程度。算法先以搜寻空间内一个任意点作起始：每一步先选择一个“邻居”，然后再计算从现有位置到达“邻居”的概率。</p>
+<p><strong>总结如下：</strong></p>
+<ol>
+<li>温度高-&gt;运动速度快（温度低-&gt;运动速度慢）</li>
+<li>温度是缓慢（想象成特别慢的那种）降低的</li>
+<li>温度基本不再变化后，趋于有序(最后内能达到最小，也就是接近最优)</li>
+</ol>
+<p>我们通过模拟这个操作，使得我们需要的答案“趋于有序”，也就是最靠近需要的值（最值）。可以证明，模拟退火算法所得解依概率收敛到全局最优解。</p>
+<h2 id="演算步骤">演算步骤</h2>
+<p>什么？你<strong>看不懂</strong>上面的？直接跳过，看下面的步骤即可。<br>
+如果我们要求函数的极大值</p>
+<ol>
+<li>设置初始温度<span class="katex"><span class="katex-mathml"><math><semantics><mrow><msub><mi>T</mi><mn>0</mn></msub></mrow><annotation encoding="application/x-tex">T_0</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.83333em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathdefault" style="margin-right:0.13889em;">T</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.30110799999999993em;"><span style="top:-2.5500000000000003em;margin-left:-0.13889em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">0</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span></span></span></span>和降温速度<span class="katex"><span class="katex-mathml"><math><semantics><mrow><mi mathvariant="normal">Δ</mi><mi>T</mi></mrow><annotation encoding="application/x-tex">\Delta T</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.68333em;vertical-align:0em;"></span><span class="mord">Δ</span><span class="mord mathdefault" style="margin-right:0.13889em;">T</span></span></span></span>（<span class="katex"><span class="katex-mathml"><math><semantics><mrow><mi mathvariant="normal">Δ</mi><mi>T</mi></mrow><annotation encoding="application/x-tex">\Delta T</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.68333em;vertical-align:0em;"></span><span class="mord">Δ</span><span class="mord mathdefault" style="margin-right:0.13889em;">T</span></span></span></span>越接近1降温速度越慢），令当前温度<span class="katex"><span class="katex-mathml"><math><semantics><mrow><msub><mi>T</mi><mrow><mi>c</mi><mi>u</mi><mi>r</mi><mi>r</mi><mi>e</mi><mi>n</mi><mi>t</mi></mrow></msub><mo>=</mo><msub><mi>T</mi><mn>0</mn></msub></mrow><annotation encoding="application/x-tex">T_{current} = T_0</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.83333em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathdefault" style="margin-right:0.13889em;">T</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.2805559999999999em;"><span style="top:-2.5500000000000003em;margin-left:-0.13889em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathdefault mtight">c</span><span class="mord mathdefault mtight">u</span><span class="mord mathdefault mtight" style="margin-right:0.02778em;">r</span><span class="mord mathdefault mtight" style="margin-right:0.02778em;">r</span><span class="mord mathdefault mtight">e</span><span class="mord mathdefault mtight">n</span><span class="mord mathdefault mtight">t</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2777777777777778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span></span><span class="base"><span class="strut" style="height:0.83333em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathdefault" style="margin-right:0.13889em;">T</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.30110799999999993em;"><span style="top:-2.5500000000000003em;margin-left:-0.13889em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">0</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span></span></span></span>,并设置一个终止温度<span class="katex"><span class="katex-mathml"><math><semantics><mrow><msub><mi>T</mi><mrow><mi>e</mi><mi>n</mi><mi>d</mi></mrow></msub></mrow><annotation encoding="application/x-tex">T_{end}</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.83333em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathdefault" style="margin-right:0.13889em;">T</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.33610799999999996em;"><span style="top:-2.5500000000000003em;margin-left:-0.13889em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathdefault mtight">e</span><span class="mord mathdefault mtight">n</span><span class="mord mathdefault mtight">d</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span></span></span></span>和一个随机的初始解<span class="katex"><span class="katex-mathml"><math><semantics><mrow><msub><mi>x</mi><mn>0</mn></msub></mrow><annotation encoding="application/x-tex">x_0</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.58056em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathdefault">x</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.30110799999999993em;"><span style="top:-2.5500000000000003em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">0</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span></span></span></span>,令当前解<span class="katex"><span class="katex-mathml"><math><semantics><mrow><msub><mi>x</mi><mi>i</mi></msub><mo>=</mo><msub><mi>x</mi><mn>0</mn></msub></mrow><annotation encoding="application/x-tex">x_i = x_0</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.58056em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathdefault">x</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.31166399999999994em;"><span style="top:-2.5500000000000003em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathdefault mtight">i</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2777777777777778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span></span><span class="base"><span class="strut" style="height:0.58056em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathdefault">x</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.30110799999999993em;"><span style="top:-2.5500000000000003em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">0</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span></span></span></span>。</li>
+<li>使当前温度发生变化（降温），<span class="katex"><span class="katex-mathml"><math><semantics><mrow><msub><mi>T</mi><mrow><mi>c</mi><mi>u</mi><mi>r</mi><mi>r</mi><mi>e</mi><mi>n</mi><mi>t</mi></mrow></msub><mo>=</mo><mi mathvariant="normal">Δ</mi><mi>T</mi><mo>×</mo><msub><mi>T</mi><mrow><mi>c</mi><mi>u</mi><mi>r</mi><mi>r</mi><mi>e</mi><mi>n</mi><mi>t</mi></mrow></msub></mrow><annotation encoding="application/x-tex">T_{current} = \Delta T \times T_{current}</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.83333em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathdefault" style="margin-right:0.13889em;">T</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.2805559999999999em;"><span style="top:-2.5500000000000003em;margin-left:-0.13889em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathdefault mtight">c</span><span class="mord mathdefault mtight">u</span><span class="mord mathdefault mtight" style="margin-right:0.02778em;">r</span><span class="mord mathdefault mtight" style="margin-right:0.02778em;">r</span><span class="mord mathdefault mtight">e</span><span class="mord mathdefault mtight">n</span><span class="mord mathdefault mtight">t</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2777777777777778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span></span><span class="base"><span class="strut" style="height:0.76666em;vertical-align:-0.08333em;"></span><span class="mord">Δ</span><span class="mord mathdefault" style="margin-right:0.13889em;">T</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span><span class="mbin">×</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span></span><span class="base"><span class="strut" style="height:0.83333em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathdefault" style="margin-right:0.13889em;">T</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.2805559999999999em;"><span style="top:-2.5500000000000003em;margin-left:-0.13889em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathdefault mtight">c</span><span class="mord mathdefault mtight">u</span><span class="mord mathdefault mtight" style="margin-right:0.02778em;">r</span><span class="mord mathdefault mtight" style="margin-right:0.02778em;">r</span><span class="mord mathdefault mtight">e</span><span class="mord mathdefault mtight">n</span><span class="mord mathdefault mtight">t</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span></span></span></span>，<span class="katex"><span class="katex-mathml"><math><semantics><mrow><mi mathvariant="normal">Δ</mi><mi>T</mi></mrow><annotation encoding="application/x-tex">\Delta T</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.68333em;vertical-align:0em;"></span><span class="mord">Δ</span><span class="mord mathdefault" style="margin-right:0.13889em;">T</span></span></span></span>的值取0.5~1之间。</li>
+<li>计算当前状态<span class="katex"><span class="katex-mathml"><math><semantics><mrow><msub><mi>x</mi><mn>0</mn></msub></mrow><annotation encoding="application/x-tex">x_0</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.58056em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathdefault">x</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.30110799999999993em;"><span style="top:-2.5500000000000003em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">0</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span></span></span></span>下的函数值, 根据当前温度进行随机扰动，产生一个新的解<span class="katex"><span class="katex-mathml"><math><semantics><mrow><msub><mi>x</mi><mi>i</mi></msub></mrow><annotation encoding="application/x-tex">x_i</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.58056em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathdefault">x</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.31166399999999994em;"><span style="top:-2.5500000000000003em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathdefault mtight">i</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span></span></span></span>，比较新解是否比旧解大（如果求函数最大值）<span class="katex"><span class="katex-mathml"><math><semantics><mrow><mi>f</mi><mo>(</mo><msub><mi>x</mi><mi>i</mi></msub><mo>)</mo><mi mathvariant="normal">−</mi><mi>f</mi><mo>(</mo><msub><mi>x</mi><mn>0</mn></msub><mo>)</mo></mrow><annotation encoding="application/x-tex">f(x_i)−f(x_0)</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathdefault" style="margin-right:0.10764em;">f</span><span class="mopen">(</span><span class="mord"><span class="mord mathdefault">x</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.31166399999999994em;"><span style="top:-2.5500000000000003em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathdefault mtight">i</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mclose">)</span><span class="mord">−</span><span class="mord mathdefault" style="margin-right:0.10764em;">f</span><span class="mopen">(</span><span class="mord"><span class="mord mathdefault">x</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.30110799999999993em;"><span style="top:-2.5500000000000003em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">0</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mclose">)</span></span></span></span>。</li>
+<li>若<span class="katex"><span class="katex-mathml"><math><semantics><mrow><mi>f</mi><mo>(</mo><msub><mi>x</mi><mi>i</mi></msub><mo>)</mo><mi mathvariant="normal">−</mi><mi>f</mi><mo>(</mo><msub><mi>x</mi><mn>0</mn></msub><mo>)</mo><mo>&gt;</mo><mn>0</mn></mrow><annotation encoding="application/x-tex">f(x_i)−f(x_0) &gt; 0</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathdefault" style="margin-right:0.10764em;">f</span><span class="mopen">(</span><span class="mord"><span class="mord mathdefault">x</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.31166399999999994em;"><span style="top:-2.5500000000000003em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathdefault mtight">i</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mclose">)</span><span class="mord">−</span><span class="mord mathdefault" style="margin-right:0.10764em;">f</span><span class="mopen">(</span><span class="mord"><span class="mord mathdefault">x</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.30110799999999993em;"><span style="top:-2.5500000000000003em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">0</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mclose">)</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span><span class="mrel">&gt;</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span></span><span class="base"><span class="strut" style="height:0.64444em;vertical-align:0em;"></span><span class="mord">0</span></span></span></span>，则接受该解，否则以概率<span class="katex"><span class="katex-mathml"><math><semantics><mrow><mi>P</mi><mo>=</mo><msup><mi>e</mi><mfrac><mrow><mi mathvariant="normal">Δ</mi><mi>f</mi></mrow><mrow><mi>k</mi><mi>T</mi></mrow></mfrac></msup></mrow><annotation encoding="application/x-tex">P = e^{\frac{\Delta f}{kT}}</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.68333em;vertical-align:0em;"></span><span class="mord mathdefault" style="margin-right:0.13889em;">P</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span></span><span class="base"><span class="strut" style="height:1.03389em;vertical-align:0em;"></span><span class="mord"><span class="mord mathdefault">e</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:1.03389em;"><span style="top:-3.363em;margin-right:0.05em;"><span class="pstrut" style="height:3em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight"><span class="mopen nulldelimiter sizing reset-size3 size6"></span><span class="mfrac"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.9584142857142857em;"><span style="top:-2.656em;"><span class="pstrut" style="height:3em;"></span><span class="sizing reset-size3 size1 mtight"><span class="mord mtight"><span class="mord mathdefault mtight" style="margin-right:0.03148em;">k</span><span class="mord mathdefault mtight" style="margin-right:0.13889em;">T</span></span></span></span><span style="top:-3.2255000000000003em;"><span class="pstrut" style="height:3em;"></span><span class="frac-line mtight" style="border-bottom-width:0.049em;"></span></span><span style="top:-3.4623857142857144em;"><span class="pstrut" style="height:3em;"></span><span class="sizing reset-size3 size1 mtight"><span class="mord mtight"><span class="mord mtight">Δ</span><span class="mord mathdefault mtight" style="margin-right:0.10764em;">f</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.344em;"><span></span></span></span></span></span><span class="mclose nulldelimiter sizing reset-size3 size6"></span></span></span></span></span></span></span></span></span></span></span></span></span>接受该解。</li>
+<li>比较<span class="katex"><span class="katex-mathml"><math><semantics><mrow><msub><mi>T</mi><mrow><mi>c</mi><mi>u</mi><mi>r</mi><mi>r</mi><mi>e</mi><mi>n</mi><mi>t</mi></mrow></msub></mrow><annotation encoding="application/x-tex">T_{current}</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.83333em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathdefault" style="margin-right:0.13889em;">T</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.2805559999999999em;"><span style="top:-2.5500000000000003em;margin-left:-0.13889em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathdefault mtight">c</span><span class="mord mathdefault mtight">u</span><span class="mord mathdefault mtight" style="margin-right:0.02778em;">r</span><span class="mord mathdefault mtight" style="margin-right:0.02778em;">r</span><span class="mord mathdefault mtight">e</span><span class="mord mathdefault mtight">n</span><span class="mord mathdefault mtight">t</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span></span></span></span>与<span class="katex"><span class="katex-mathml"><math><semantics><mrow><msub><mi>T</mi><mrow><mi>e</mi><mi>n</mi><mi>d</mi></mrow></msub></mrow><annotation encoding="application/x-tex">T_{end}</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.83333em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathdefault" style="margin-right:0.13889em;">T</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.33610799999999996em;"><span style="top:-2.5500000000000003em;margin-left:-0.13889em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathdefault mtight">e</span><span class="mord mathdefault mtight">n</span><span class="mord mathdefault mtight">d</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span></span></span></span>的大小，若<span class="katex"><span class="katex-mathml"><math><semantics><mrow><msub><mi>T</mi><mrow><mi>c</mi><mi>u</mi><mi>r</mi><mi>r</mi><mi>e</mi><mi>n</mi><mi>t</mi></mrow></msub><mo>&lt;</mo><msub><mi>T</mi><mrow><mi>e</mi><mi>n</mi><mi>d</mi></mrow></msub></mrow><annotation encoding="application/x-tex">T_{current} &lt; T_{end}</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.83333em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathdefault" style="margin-right:0.13889em;">T</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.2805559999999999em;"><span style="top:-2.5500000000000003em;margin-left:-0.13889em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathdefault mtight">c</span><span class="mord mathdefault mtight">u</span><span class="mord mathdefault mtight" style="margin-right:0.02778em;">r</span><span class="mord mathdefault mtight" style="margin-right:0.02778em;">r</span><span class="mord mathdefault mtight">e</span><span class="mord mathdefault mtight">n</span><span class="mord mathdefault mtight">t</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2777777777777778em;"></span><span class="mrel">&lt;</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span></span><span class="base"><span class="strut" style="height:0.83333em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathdefault" style="margin-right:0.13889em;">T</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.33610799999999996em;"><span style="top:-2.5500000000000003em;margin-left:-0.13889em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathdefault mtight">e</span><span class="mord mathdefault mtight">n</span><span class="mord mathdefault mtight">d</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span></span></span></span>，则终止，否则循环执行234。</li>
+</ol>
+<p>可以看出，算法实际上是两层循环嵌套，外层循环控制温度，内层循环来进行扰动产生新解。</p>
+<h2 id="具体做法">具体做法</h2>
+<h3 id="第一步">第一步</h3>
+<p>首先，模拟退火是一种迭代算法，这意味着它需要循环。因此，我们需要先设定一个初始的温度<span class="katex"><span class="katex-mathml"><math><semantics><mrow><mi>T</mi></mrow><annotation encoding="application/x-tex">T</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.68333em;vertical-align:0em;"></span><span class="mord mathdefault" style="margin-right:0.13889em;">T</span></span></span></span>（比如说1000）和降温系数<span class="katex"><span class="katex-mathml"><math><semantics><mrow><mi mathvariant="normal">Δ</mi><mi>T</mi></mrow><annotation encoding="application/x-tex">\Delta T</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.68333em;vertical-align:0em;"></span><span class="mord">Δ</span><span class="mord mathdefault" style="margin-right:0.13889em;">T</span></span></span></span> 。</p>
+<h3 id="第二步">第二步</h3>
+<p>我们要求解的答案无非是两个：自变量<span class="katex"><span class="katex-mathml"><math><semantics><mrow><mi>x</mi></mrow><annotation encoding="application/x-tex">x</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.43056em;vertical-align:0em;"></span><span class="mord mathdefault">x</span></span></span></span>和对应函数的最大值<span class="katex"><span class="katex-mathml"><math><semantics><mrow><mi>f</mi><mo>(</mo><mi>x</mi><mo>)</mo></mrow><annotation encoding="application/x-tex">f(x)</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathdefault" style="margin-right:0.10764em;">f</span><span class="mopen">(</span><span class="mord mathdefault">x</span><span class="mclose">)</span></span></span></span>。<br>
+而模拟退火算法的核心步骤，分为新解的产生和接受新解两部分：<br>
+（接受新解采用的是Metropolis准则：若Δt′&lt;0则接受S′作为新的当前解S，否则以概率exp（-Δt′/T）接受S′作为新的当前解S。有兴趣可以了解一下，没兴趣就不用理，这里不过多解释。）</p>
+<ol>
+<li>
+<p>我们在函数定义域内随机找一点<span class="katex"><span class="katex-mathml"><math><semantics><mrow><msub><mi>x</mi><mn>0</mn></msub></mrow><annotation encoding="application/x-tex">x_0</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.58056em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathdefault">x</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.30110799999999993em;"><span style="top:-2.5500000000000003em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">0</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span></span></span></span>，以这个点作为我们的初始值（相当于物体里的一个粒子），由函数算得<span class="katex"><span class="katex-mathml"><math><semantics><mrow><mi>f</mi><mo>(</mo><msub><mi>x</mi><mn>0</mn></msub><mo>)</mo></mrow><annotation encoding="application/x-tex">f(x_0)</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathdefault" style="margin-right:0.10764em;">f</span><span class="mopen">(</span><span class="mord"><span class="mord mathdefault">x</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.30110799999999993em;"><span style="top:-2.5500000000000003em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">0</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mclose">)</span></span></span></span> 。<br>
+<img src="https://markdeia.github.io/post-images/1642700772292.png" alt="" loading="lazy"></p>
+</li>
+<li>
+<p>刚才我们说了<span class="katex"><span class="katex-mathml"><math><semantics><mrow><msub><mi>x</mi><mn>0</mn></msub></mrow><annotation encoding="application/x-tex">x_0</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.58056em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathdefault">x</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.30110799999999993em;"><span style="top:-2.5500000000000003em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">0</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span></span></span></span>相当于是一个粒子，所以我们会进行一个无序运动，<strong>也就是向左或者向右随机移动到<span class="katex"><span class="katex-mathml"><math><semantics><mrow><msub><mi>x</mi><mn>1</mn></msub></mrow><annotation encoding="application/x-tex">x_1</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.58056em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathdefault">x</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.30110799999999993em;"><span style="top:-2.5500000000000003em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">1</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span></span></span></span>。</strong> 是的，是随机移动，可能向左，也可能向右，但是请记住一个关键点：移动的幅度和当前的温度<span class="katex"><span class="katex-mathml"><math><semantics><mrow><mi>T</mi></mrow><annotation encoding="application/x-tex">T</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.68333em;vertical-align:0em;"></span><span class="mord mathdefault" style="margin-right:0.13889em;">T</span></span></span></span>有关。温度<span class="katex"><span class="katex-mathml"><math><semantics><mrow><mi>T</mi></mrow><annotation encoding="application/x-tex">T</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.68333em;vertical-align:0em;"></span><span class="mord mathdefault" style="margin-right:0.13889em;">T</span></span></span></span>越大，移动的幅度越大。温度<span class="katex"><span class="katex-mathml"><math><semantics><mrow><mi>T</mi></mrow><annotation encoding="application/x-tex">T</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.68333em;vertical-align:0em;"></span><span class="mord mathdefault" style="margin-right:0.13889em;">T</span></span></span></span>越小，移动的幅度就越小。这是在模拟粒子无序运动的状态。</p>
+</li>
+<li>
+<p>接受更&quot;好&quot;的状态<br>
+假设我们移动到了<span class="katex"><span class="katex-mathml"><math><semantics><mrow><msub><mi>x</mi><mn>1</mn></msub></mrow><annotation encoding="application/x-tex">x_1</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.58056em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathdefault">x</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.30110799999999993em;"><span style="top:-2.5500000000000003em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">1</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span></span></span></span>处，且这个点对应的<span class="katex"><span class="katex-mathml"><math><semantics><mrow><mi>f</mi><mo>(</mo><msub><mi>x</mi><mn>1</mn></msub><mo>)</mo></mrow><annotation encoding="application/x-tex">f(x_1)</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathdefault" style="margin-right:0.10764em;">f</span><span class="mopen">(</span><span class="mord"><span class="mord mathdefault">x</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.30110799999999993em;"><span style="top:-2.5500000000000003em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">1</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mclose">)</span></span></span></span>很明显答案是优于（大于）当前的<span class="katex"><span class="katex-mathml"><math><semantics><mrow><mi>f</mi><mo>(</mo><msub><mi>x</mi><mn>0</mn></msub><mo>)</mo></mrow><annotation encoding="application/x-tex">f(x_0)</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathdefault" style="margin-right:0.10764em;">f</span><span class="mopen">(</span><span class="mord"><span class="mord mathdefault">x</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.30110799999999993em;"><span style="top:-2.5500000000000003em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">0</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mclose">)</span></span></span></span>的。因此我们将答案进行更新。也就是将初始值进行替换：将<span class="katex"><span class="katex-mathml"><math><semantics><mrow><msub><mi>x</mi><mn>1</mn></msub></mrow><annotation encoding="application/x-tex">x_1</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.58056em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathdefault">x</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.30110799999999993em;"><span style="top:-2.5500000000000003em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">1</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span></span></span></span>设为初始点。这是一种贪心的思想。<br>
+<img src="https://markdeia.github.io/post-images/1642701012477.png" alt="" loading="lazy"></p>
+</li>
+<li>
+<p>以一定概率接受更差的状态<br>
+为什么我们要接受一个更加差的状态呢？因为可能在一个较差的状态旁边会出现一个更加高的山峰（更优解）<br>
+<img src="https://markdeia.github.io/post-images/1642701234765.png" alt="" loading="lazy"><br>
+如果我们鼠目寸光，只盯着右半区，很容易随着温度的下降、左右跳转幅度的减小而迷失自己，最后困死在小山丘中。<br>
+而我们如果找到了左边山峰的低点，以一定的概率接受了它（概率大小和温度以及当前的值的关键程度有关），会在跳转幅度减少之前，尽可能找到最优点。</p>
+</li>
+</ol>
+<p>那么我们以多少的概率去接受它呢？根据Metropolis准则，这个概率为</p>
+<p class='katex-block'><span class="katex-display"><span class="katex"><span class="katex-mathml"><math><semantics><mrow><msup><mi>e</mi><mfrac><mrow><mi mathvariant="normal">Δ</mi><mi>f</mi></mrow><mrow><mi>k</mi><mi>T</mi></mrow></mfrac></msup></mrow><annotation encoding="application/x-tex">e^{\frac{\Delta f}{kT}} 
+</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1.0838899999999998em;vertical-align:0em;"></span><span class="mord"><span class="mord mathdefault">e</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:1.0838899999999998em;"><span style="top:-3.4130000000000003em;margin-right:0.05em;"><span class="pstrut" style="height:3em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight"><span class="mopen nulldelimiter sizing reset-size3 size6"></span><span class="mfrac"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.9584142857142857em;"><span style="top:-2.656em;"><span class="pstrut" style="height:3em;"></span><span class="sizing reset-size3 size1 mtight"><span class="mord mtight"><span class="mord mathdefault mtight" style="margin-right:0.03148em;">k</span><span class="mord mathdefault mtight" style="margin-right:0.13889em;">T</span></span></span></span><span style="top:-3.2255000000000003em;"><span class="pstrut" style="height:3em;"></span><span class="frac-line mtight" style="border-bottom-width:0.049em;"></span></span><span style="top:-3.4623857142857144em;"><span class="pstrut" style="height:3em;"></span><span class="sizing reset-size3 size1 mtight"><span class="mord mtight"><span class="mord mtight">Δ</span><span class="mord mathdefault mtight" style="margin-right:0.10764em;">f</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.344em;"><span></span></span></span></span></span><span class="mclose nulldelimiter sizing reset-size3 size6"></span></span></span></span></span></span></span></span></span></span></span></span></span></span></p>
+<p>这里解释一下各个变量：<br>
+<span class="katex"><span class="katex-mathml"><math><semantics><mrow><msup><mi>e</mi><mi>x</mi></msup></mrow><annotation encoding="application/x-tex">e^x</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.664392em;vertical-align:0em;"></span><span class="mord"><span class="mord mathdefault">e</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.664392em;"><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathdefault mtight">x</span></span></span></span></span></span></span></span></span></span></span> ：以<span class="katex"><span class="katex-mathml"><math><semantics><mrow><mi>e</mi></mrow><annotation encoding="application/x-tex">e</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.43056em;vertical-align:0em;"></span><span class="mord mathdefault">e</span></span></span></span>（自然常数）为底的指数函数 高中就学了，不解释。这里<span class="katex"><span class="katex-mathml"><math><semantics><mrow><msup><mi>e</mi><mi>x</mi></msup></mrow><annotation encoding="application/x-tex">e^x</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.664392em;vertical-align:0em;"></span><span class="mord"><span class="mord mathdefault">e</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.664392em;"><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathdefault mtight">x</span></span></span></span></span></span></span></span></span></span></span>的值一定不能大于1（概率不能大于1）。<br>
+<span class="katex"><span class="katex-mathml"><math><semantics><mrow><mi>k</mi></mrow><annotation encoding="application/x-tex">k</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.69444em;vertical-align:0em;"></span><span class="mord mathdefault" style="margin-right:0.03148em;">k</span></span></span></span>：玻尔兹曼常数，我们在代码中不会用到，直接认为<span class="katex"><span class="katex-mathml"><math><semantics><mrow><mi>k</mi><mo>=</mo><mn>1</mn></mrow><annotation encoding="application/x-tex">k=1</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.69444em;vertical-align:0em;"></span><span class="mord mathdefault" style="margin-right:0.03148em;">k</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span></span><span class="base"><span class="strut" style="height:0.64444em;vertical-align:0em;"></span><span class="mord">1</span></span></span></span>，即概率表达式变成了<span class="katex"><span class="katex-mathml"><math><semantics><mrow><msup><mi>e</mi><mfrac><mrow><mi mathvariant="normal">Δ</mi><mi>f</mi></mrow><mi>T</mi></mfrac></msup></mrow><annotation encoding="application/x-tex">e^{\frac{\Delta f}{T}}</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1.03389em;vertical-align:0em;"></span><span class="mord"><span class="mord mathdefault">e</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:1.03389em;"><span style="top:-3.363em;margin-right:0.05em;"><span class="pstrut" style="height:3em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight"><span class="mopen nulldelimiter sizing reset-size3 size6"></span><span class="mfrac"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.9584142857142857em;"><span style="top:-2.656em;"><span class="pstrut" style="height:3em;"></span><span class="sizing reset-size3 size1 mtight"><span class="mord mtight"><span class="mord mathdefault mtight" style="margin-right:0.13889em;">T</span></span></span></span><span style="top:-3.2255000000000003em;"><span class="pstrut" style="height:3em;"></span><span class="frac-line mtight" style="border-bottom-width:0.049em;"></span></span><span style="top:-3.4623857142857144em;"><span class="pstrut" style="height:3em;"></span><span class="sizing reset-size3 size1 mtight"><span class="mord mtight"><span class="mord mtight">Δ</span><span class="mord mathdefault mtight" style="margin-right:0.10764em;">f</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.344em;"><span></span></span></span></span></span><span class="mclose nulldelimiter sizing reset-size3 size6"></span></span></span></span></span></span></span></span></span></span></span></span></span>。<br>
+<span class="katex"><span class="katex-mathml"><math><semantics><mrow><mi>T</mi></mrow><annotation encoding="application/x-tex">T</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.68333em;vertical-align:0em;"></span><span class="mord mathdefault" style="margin-right:0.13889em;">T</span></span></span></span>：当前温度。<br>
+<span class="katex"><span class="katex-mathml"><math><semantics><mrow><mi mathvariant="normal">Δ</mi><mi>f</mi></mrow><annotation encoding="application/x-tex">\Delta f</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8888799999999999em;vertical-align:-0.19444em;"></span><span class="mord">Δ</span><span class="mord mathdefault" style="margin-right:0.10764em;">f</span></span></span></span>：<strong>重点！！！</strong> 由高中知识，若要使<span class="katex"><span class="katex-mathml"><math><semantics><mrow><msup><mi>e</mi><mi>x</mi></msup></mrow><annotation encoding="application/x-tex">e^x</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.664392em;vertical-align:0em;"></span><span class="mord"><span class="mord mathdefault">e</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.664392em;"><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathdefault mtight">x</span></span></span></span></span></span></span></span></span></span></span>这个函数的值不大于1，则x（e的指数）一定不能大于0。我们想要函数<span class="katex"><span class="katex-mathml"><math><semantics><mrow><msup><mi>e</mi><mi>x</mi></msup></mrow><annotation encoding="application/x-tex">e^x</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.664392em;vertical-align:0em;"></span><span class="mord"><span class="mord mathdefault">e</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.664392em;"><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathdefault mtight">x</span></span></span></span></span></span></span></span></span></span></span>来代表一个概率值，一定要让<span class="katex"><span class="katex-mathml"><math><semantics><mrow><msup><mi>e</mi><mi>x</mi></msup></mrow><annotation encoding="application/x-tex">e^x</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.664392em;vertical-align:0em;"></span><span class="mord"><span class="mord mathdefault">e</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.664392em;"><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathdefault mtight">x</span></span></span></span></span></span></span></span></span></span></span>的值域属于(0,1)，所以<span class="katex"><span class="katex-mathml"><math><semantics><mrow><mfrac><mrow><mi mathvariant="normal">Δ</mi><mi>f</mi></mrow><mrow><mi>k</mi><mi>T</mi></mrow></mfrac></mrow><annotation encoding="application/x-tex">\frac{\Delta f}{kT}</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1.277216em;vertical-align:-0.345em;"></span><span class="mord"><span class="mopen nulldelimiter"></span><span class="mfrac"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.9322159999999999em;"><span style="top:-2.6550000000000002em;"><span class="pstrut" style="height:3em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathdefault mtight" style="margin-right:0.03148em;">k</span><span class="mord mathdefault mtight" style="margin-right:0.13889em;">T</span></span></span></span><span style="top:-3.23em;"><span class="pstrut" style="height:3em;"></span><span class="frac-line" style="border-bottom-width:0.04em;"></span></span><span style="top:-3.446108em;"><span class="pstrut" style="height:3em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight">Δ</span><span class="mord mathdefault mtight" style="margin-right:0.10764em;">f</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.345em;"><span></span></span></span></span></span><span class="mclose nulldelimiter"></span></span></span></span></span>必须是个负数。但是<span class="katex"><span class="katex-mathml"><math><semantics><mrow><mi>k</mi><mi>T</mi></mrow><annotation encoding="application/x-tex">kT</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.69444em;vertical-align:0em;"></span><span class="mord mathdefault" style="margin-right:0.03148em;">k</span><span class="mord mathdefault" style="margin-right:0.13889em;">T</span></span></span></span>在我们的模拟中一定是正数，那么<span class="katex"><span class="katex-mathml"><math><semantics><mrow><mi mathvariant="normal">Δ</mi><mi>f</mi></mrow><annotation encoding="application/x-tex">\Delta f</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8888799999999999em;vertical-align:-0.19444em;"></span><span class="mord">Δ</span><span class="mord mathdefault" style="margin-right:0.10764em;">f</span></span></span></span>必须是个负数！<br>
+其实<span class="katex"><span class="katex-mathml"><math><semantics><mrow><mi mathvariant="normal">Δ</mi><mi>f</mi></mrow><annotation encoding="application/x-tex">\Delta f</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8888799999999999em;vertical-align:-0.19444em;"></span><span class="mord">Δ</span><span class="mord mathdefault" style="margin-right:0.10764em;">f</span></span></span></span>就是当前解的函数值与目标解函数值之差，<strong><span class="katex"><span class="katex-mathml"><math><semantics><mrow><mi mathvariant="normal">Δ</mi><mi>f</mi><mo>=</mo><mi mathvariant="normal">−</mi><mi mathvariant="normal">∣</mi><mi>f</mi><mo>(</mo><msub><mi>x</mi><mn>0</mn></msub><mo>)</mo><mi mathvariant="normal">−</mi><mi>f</mi><mo>(</mo><msub><mi>x</mi><mn>1</mn></msub><mo>)</mo><mi mathvariant="normal">∣</mi></mrow><annotation encoding="application/x-tex">\Delta f=−|f(x_0)−f(x_1)|</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8888799999999999em;vertical-align:-0.19444em;"></span><span class="mord">Δ</span><span class="mord mathdefault" style="margin-right:0.10764em;">f</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord">−</span><span class="mord">∣</span><span class="mord mathdefault" style="margin-right:0.10764em;">f</span><span class="mopen">(</span><span class="mord"><span class="mord mathdefault">x</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.30110799999999993em;"><span style="top:-2.5500000000000003em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">0</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mclose">)</span><span class="mord">−</span><span class="mord mathdefault" style="margin-right:0.10764em;">f</span><span class="mopen">(</span><span class="mord"><span class="mord mathdefault">x</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.30110799999999993em;"><span style="top:-2.5500000000000003em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">1</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mclose">)</span><span class="mord">∣</span></span></span></span></strong>，并且一定是个负数。这个需要具体问题具体分析。</p>
+<p>比如现在我们求一个函数的最大值，那么如果<span class="katex"><span class="katex-mathml"><math><semantics><mrow><mi>f</mi><mo>(</mo><msub><mi>x</mi><mn>0</mn></msub><mo>)</mo><mo>&lt;</mo><mi>f</mi><mo>(</mo><msub><mi>x</mi><mn>1</mn></msub><mo>)</mo></mrow><annotation encoding="application/x-tex">f(x_0)&lt;f(x_1)</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathdefault" style="margin-right:0.10764em;">f</span><span class="mopen">(</span><span class="mord"><span class="mord mathdefault">x</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.30110799999999993em;"><span style="top:-2.5500000000000003em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">0</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mclose">)</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span><span class="mrel">&lt;</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathdefault" style="margin-right:0.10764em;">f</span><span class="mopen">(</span><span class="mord"><span class="mord mathdefault">x</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.30110799999999993em;"><span style="top:-2.5500000000000003em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">1</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mclose">)</span></span></span></span>了，那就说明结果变好了，我们肯定选择它（见第4点）</p>
+<p>如果<span class="katex"><span class="katex-mathml"><math><semantics><mrow><mi>f</mi><mo>(</mo><msub><mi>x</mi><mn>0</mn></msub><mo>)</mo><mo>&gt;</mo><mi>f</mi><mo>(</mo><msub><mi>x</mi><mn>1</mn></msub><mo>)</mo></mrow><annotation encoding="application/x-tex">f(x_0)&gt;f(x_1)</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathdefault" style="margin-right:0.10764em;">f</span><span class="mopen">(</span><span class="mord"><span class="mord mathdefault">x</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.30110799999999993em;"><span style="top:-2.5500000000000003em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">0</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mclose">)</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span><span class="mrel">&gt;</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathdefault" style="margin-right:0.10764em;">f</span><span class="mopen">(</span><span class="mord"><span class="mord mathdefault">x</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.30110799999999993em;"><span style="top:-2.5500000000000003em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">1</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mclose">)</span></span></span></span>，那就说明结果变差了，我们需要概率选择它，因此</p>
+<p class='katex-block'><span class="katex-display"><span class="katex"><span class="katex-mathml"><math><semantics><mrow><mi mathvariant="normal">Δ</mi><mi>f</mi><mo>=</mo><mi mathvariant="normal">−</mi><mo>(</mo><mi>f</mi><mo>(</mo><msub><mi>x</mi><mn>0</mn></msub><mo>)</mo><mi mathvariant="normal">−</mi><mi>f</mi><mo>(</mo><msub><mi>x</mi><mn>1</mn></msub><mo>)</mo><mo>)</mo></mrow><annotation encoding="application/x-tex">\Delta f=−(f(x_0)−f(x_1))
+</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8888799999999999em;vertical-align:-0.19444em;"></span><span class="mord">Δ</span><span class="mord mathdefault" style="margin-right:0.10764em;">f</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord">−</span><span class="mopen">(</span><span class="mord mathdefault" style="margin-right:0.10764em;">f</span><span class="mopen">(</span><span class="mord"><span class="mord mathdefault">x</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.30110799999999993em;"><span style="top:-2.5500000000000003em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">0</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mclose">)</span><span class="mord">−</span><span class="mord mathdefault" style="margin-right:0.10764em;">f</span><span class="mopen">(</span><span class="mord"><span class="mord mathdefault">x</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.30110799999999993em;"><span style="top:-2.5500000000000003em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">1</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mclose">)</span><span class="mclose">)</span></span></span></span></span></p>
+<p><strong>所以总结一下就是：</strong></p>
+<ul>
+<li>随机后的函数值如果结果更好，我们一定选择它。</li>
+<li>随机后的函数值如果结果更差，我们以<span class="katex"><span class="katex-mathml"><math><semantics><mrow><msup><mi>e</mi><mfrac><mrow><mi mathvariant="normal">Δ</mi><mi>f</mi></mrow><mrow><mi>k</mi><mi>T</mi></mrow></mfrac></msup></mrow><annotation encoding="application/x-tex">e^{\frac{\Delta f}{kT}}</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1.03389em;vertical-align:0em;"></span><span class="mord"><span class="mord mathdefault">e</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:1.03389em;"><span style="top:-3.363em;margin-right:0.05em;"><span class="pstrut" style="height:3em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight"><span class="mopen nulldelimiter sizing reset-size3 size6"></span><span class="mfrac"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.9584142857142857em;"><span style="top:-2.656em;"><span class="pstrut" style="height:3em;"></span><span class="sizing reset-size3 size1 mtight"><span class="mord mtight"><span class="mord mathdefault mtight" style="margin-right:0.03148em;">k</span><span class="mord mathdefault mtight" style="margin-right:0.13889em;">T</span></span></span></span><span style="top:-3.2255000000000003em;"><span class="pstrut" style="height:3em;"></span><span class="frac-line mtight" style="border-bottom-width:0.049em;"></span></span><span style="top:-3.4623857142857144em;"><span class="pstrut" style="height:3em;"></span><span class="sizing reset-size3 size1 mtight"><span class="mord mtight"><span class="mord mtight">Δ</span><span class="mord mathdefault mtight" style="margin-right:0.10764em;">f</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.344em;"><span></span></span></span></span></span><span class="mclose nulldelimiter sizing reset-size3 size6"></span></span></span></span></span></span></span></span></span></span></span></span></span>的概率接受它。</li>
+</ul>
+<p><strong>程序框图：</strong><br>
+<img src="https://static.oschina.net/uploads/img/202008/14122341_DdTn.png" alt="" loading="lazy"><br>
+<strong>关于接受概率<span class="katex"><span class="katex-mathml"><math><semantics><mrow><msup><mi>e</mi><mi>x</mi></msup></mrow><annotation encoding="application/x-tex">e^x</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.664392em;vertical-align:0em;"></span><span class="mord"><span class="mord mathdefault">e</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.664392em;"><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathdefault mtight">x</span></span></span></span></span></span></span></span></span></span></span>和Δf以及kT的关系：</strong></p>
+<p>当kT越大时(温度越高)，由于<span class="katex"><span class="katex-mathml"><math><semantics><mrow><mi mathvariant="normal">Δ</mi><mi>f</mi></mrow><annotation encoding="application/x-tex">\Delta f</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8888799999999999em;vertical-align:-0.19444em;"></span><span class="mord">Δ</span><span class="mord mathdefault" style="margin-right:0.10764em;">f</span></span></span></span>是一个负数，所以算出来的值会越大。比如-1 / 1000 等于 -0.001，很明显-0.001 &gt; -1，由于<span class="katex"><span class="katex-mathml"><math><semantics><mrow><msup><mi>e</mi><mi>x</mi></msup></mrow><annotation encoding="application/x-tex">e^x</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.664392em;vertical-align:0em;"></span><span class="mord"><span class="mord mathdefault">e</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.664392em;"><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathdefault mtight">x</span></span></span></span></span></span></span></span></span></span></span>是个单调递增函数，所以温度越高时，接受的概率就越大。<br>
+<span class="katex"><span class="katex-mathml"><math><semantics><mrow><mi mathvariant="normal">Δ</mi><mi>f</mi></mrow><annotation encoding="application/x-tex">\Delta f</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8888799999999999em;vertical-align:-0.19444em;"></span><span class="mord">Δ</span><span class="mord mathdefault" style="margin-right:0.10764em;">f</span></span></span></span>越小，说明答案越糟糕，那么接受的概率就越小。</p>
+<h2 id="伪代码">伪代码</h2>
+<p>注：对代码中的函数作出解释：</p>
+<ol>
+<li>
+<p>rand()函数<br>
+rand()函数可以默认拿到[0,32767]内的随机整数<br>
+RAND_MAX = 32767，可以看作常量。本质是宏定义: #define RAND_MAX 32767<br>
+rand() * 2 的范围是[0,32767 * 2]<br>
+rand() * 2 - RAND_MAX 的范围是[-32767, 32767]</p>
+</li>
+<li>
+<p>exp()函数：exp(x)代表<span class="katex"><span class="katex-mathml"><math><semantics><mrow><msup><mi>e</mi><mi>x</mi></msup></mrow><annotation encoding="application/x-tex">e^x</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.664392em;vertical-align:0em;"></span><span class="mord"><span class="mord mathdefault">e</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.664392em;"><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathdefault mtight">x</span></span></span></span></span></span></span></span></span></span></span></p>
+</li>
+<li>
+<p>exp((df - f) / T) * RAND_MAX &gt; rand()<br>
+目的是要概率接受，但是<span class="katex"><span class="katex-mathml"><math><semantics><mrow><msup><mi>e</mi><mi>x</mi></msup></mrow><annotation encoding="application/x-tex">e^x</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.664392em;vertical-align:0em;"></span><span class="mord"><span class="mord mathdefault">e</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.664392em;"><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathdefault mtight">x</span></span></span></span></span></span></span></span></span></span></span>是个准确值，所以从理论上我们可以生成一个(0,1)的随机数，如果<span class="katex"><span class="katex-mathml"><math><semantics><mrow><msup><mi>e</mi><mi>x</mi></msup></mrow><annotation encoding="application/x-tex">e^x</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.664392em;vertical-align:0em;"></span><span class="mord"><span class="mord mathdefault">e</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.664392em;"><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathdefault mtight">x</span></span></span></span></span></span></span></span></span></span></span>比(0,1)这个随机数要大，那么我们就接受。<br>
+但是由于rand()只能产生[0,32767]内的随机整数，化成小数太过麻烦。所以我们可以把左边乘以RAND_MAX（也就是把概率同时扩大32767倍），效果就等同于<span class="katex"><span class="katex-mathml"><math><semantics><mrow><msup><mi>e</mi><mi>x</mi></msup></mrow><annotation encoding="application/x-tex">e^x</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.664392em;vertical-align:0em;"></span><span class="mord"><span class="mord mathdefault">e</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.664392em;"><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathdefault mtight">x</span></span></span></span></span></span></span></span></span></span></span>比(0,1)了。</p>
+</li>
+</ol>
+<pre><code class="language-double">double dT = 0.99; //代表系数delta T
+double eps = 1e-14; //相当于0.0000000000000001
+
+//用自变量计算函数值,这里可能存在多个自变量对应一个函数值的情况，比如f(x,y)
+double func(int x, ... ) {
+    //这里是对函数值进行计算
+    double ans = .......
+    return ans;
+}
+//原始值
+double x = rand(); //x0取随机值
+double f = func(x,...); //通过自变量算出f(x0)的值
+while(T &gt; eps) {
+    //--------------
+    //这里是每一次退火的操作
+    
+    //x1可以左右随机移动，幅度和温度T正相关，所以*T
+    //注意这里移动可以左右移动，但是也可以单向移动
+    //关于rand()详细见开头注的①
+    double dx = x + (2*rand() - RAND_MAX) * T; 
+    
+    //让x落在定义域内，如果没在里面，就重新随机。题目有要求需要写，否则不用写
+    // ================
+    while(x &gt; ? || x &lt; ? ...) {
+        double dx = x + (2*rand() - RAND_MAX) * T; 
+    }
+    // ================
+    
+    //求出f(x1)的值
+    double df = func(dx);
+    //这里需要具体问题具体分析，我们要接受更加优秀的情况。可能是df &lt; f(比如求最小值）
+    if(f &lt; df) {
+        f = df; x = dx;  [...,y = dy;] // 接受，替换值，如果多个自变量，那么都替换
+    }
+    //否则概率接受，注意这里df-f也要具体问题具体分析。
+    //详细见开头注的②③
+    else if(exp((df - f) / T) * RAND_MAX &gt; rand()) {
+        f = df; x = dx;  [...y = dy;] // 接受，替换值，如果多个自变量，那么都替换
+    }
+	//--------------
+    T = T * dT; //温度每次下降一点点， T * 0.99
+}
+//最后输出靠近最优的自变量x值，和函数值f(x)
+cout &lt;&lt; x &lt;&lt; &quot; &quot; &lt;&lt; f &lt;&lt; endl;
+</code></pre>
+]]></content>
+    </entry>
+    <entry>
+        <title type="html"><![CDATA[玩转信用——我的信用卡把玩姿势]]></title>
+        <id>https://markdeia.github.io/post/how-to-use-credit-card/</id>
+        <link href="https://markdeia.github.io/post/how-to-use-credit-card/">
+        </link>
+        <updated>2022-01-10T12:58:59.000Z</updated>
+        <summary type="html"><![CDATA[<p>我为这篇文章想了好几种开头，有诙谐幽默的，有微言大义的，然而删删改改，还是觉得平铺直叙，阐幽明微就好，毕竟“信用”这档子事儿，和其他人都没有关系，却会跟着你一辈子，成为一张不长在脑袋上的颜面。</p>
+<p>毕竟，把时间尺度拉到整个人生这么长，无数的不确定因素将会降临到你的生活里，到那时能起作用帮到你的，可能不是你笃信的个人能力，也非亲朋好友，而是信用。😇</p>
+]]></summary>
+        <content type="html"><![CDATA[<p>我为这篇文章想了好几种开头，有诙谐幽默的，有微言大义的，然而删删改改，还是觉得平铺直叙，阐幽明微就好，毕竟“信用”这档子事儿，和其他人都没有关系，却会跟着你一辈子，成为一张不长在脑袋上的颜面。</p>
+<p>毕竟，把时间尺度拉到整个人生这么长，无数的不确定因素将会降临到你的生活里，到那时能起作用帮到你的，可能不是你笃信的个人能力，也非亲朋好友，而是信用。😇</p>
+<!-- more -->
+<p>在开始之前，我想先阐述清楚现代社会的 <strong>“信用”</strong> 为何物。</p>
+<h1 id="信用的实质">信用的实质</h1>
+<p>能被用于验证信用资质的东西，既可以是实物，如企业和个人所拥有的房产、车辆、存款、债权等，也可以是信息，如身份特质、非即付经济交往中的履约历史记录、消费记录、行为记录（违法犯罪和有违社会公德的记录等）、人脉关系（比如和一堆信用好的人是朋友，其自身的信用也不会差到哪儿去）和记录在案的时长，譬如一个履约良好10年的人就比半年的资质更好。</p>
+<p>说了这么多，你应该也认识到了信用和征信都是内涵丰富的词，要阐述这两个词的外延，写几本书出来都不为过，这篇颇费口舌的姿势也仅仅领你入门了而已，和“爱情”这种令人荡漾不已的词比起来，信用的份量更重，它不会让你心灰意冷，也不会碎了就拼不起来，信用的保质期就是你的一生，即便是在死后，也会化作身后名伴你长眠。</p>
+<p>啊，说了这么多很虚的东西，不妨看点实际的。😙</p>
+<h2 id="信用报告">信用报告</h2>
+<p>信用报告也有两类，一类是企业信用报告，一类是个人信用报告，前者不是本文的重点，说“个人信用报告”，如果不附加什么条件，就是指中国人民银行征信中心出具的信用报告，而征信中心也是目前中国唯一的国家级征信机构，信息来源极为广泛，不仅来自于银行、信用社和政府机构（如法院、税务部门），也还有服务性企业如通信公司，另外民间的一些企业，如支付宝/财付通之类的支付公司、电商平台，甚至一些网贷机构也会接入人行的征信系统，这也意味着即便只是在网上发生了借贷，连字都没签过，逾期同样有可能出现在信报上。<br>
+个人信报主要包含：</p>
+<ol>
+<li>主观意愿，根据个人对信用的认识，对建立社会信用体系的观念和想法，是否愿意公开个人信用信息，做一个诚实守信的人，主动接受个人信用状况评定。</li>
+<li>自然条件、客观条件。通过对个人户籍信息，自然情况在内的各种静态信息和动态信息的关注，从而判定个人的信用预期情况。</li>
+<li>教育经历、职业经历。从一个人的受教育程度、职业类别、从业年限、专业资质判定其教育及职业信用积分。</li>
+<li>资产状况。房屋产权为不动产，有价证券、个人储蓄、参股凭证及各种资产证明是判定信用等级的有效参照物。（实际上个人信报里没有个人资产的记录，居住信息里也只有居住状况，没有房屋产权的记载，这些信息主要是银行掌握而非征信中心）</li>
+<li>法律意识、社会价值。通过对个人社会生活中诸如是否认可基本道德标准、是否遵纪守法、是否积极参与各项社会公益活动等判定其信用积分。</li>
+</ol>
+<p>银行、支付平台乃至P2P网贷等金融机构都接入央行的系统，是好事儿也是坏事儿，就社会整体而言，越多的机构接入央行的系统，社会生产、货币和资本的流通也就越透明，不法分子违法犯罪的成本也越高，想非法获利且躲避监管的难度就变得非常大，因为社会的总体趋势是非现金交易，而但凡借助各式网络进行交易，即便是比特币这种去中心化的虚拟货币，也有迹可循（如BlockSeer）。</p>
+<p>但，这种“透明”是针对监管者而言，对公众来说流通领域依然是个黑盒，就算领导们公布了财产，无知群众也不知道是不是全部公布了，而就算全部公布了，屁民依然不清楚是否非法所得。换句话说，愈来愈多的金融机构接入央行是强化了政府对社会民众的掌控能力，而若你非常注重隐私，讨厌大政府，不愿意被过多监管，不想自己的行为数据如一位透明人展现在政府面前，那就要反其道行之，要么用不接入央行的产品，要么用境外的。这点，那些在国外挥金如土的中国土豪们才是真正的老司机。</p>
+<p>人行征信中心是严格执行《征信业管理条例》的，因此虽然采集范围广泛，信息众多，但个人宗教信仰、基因、指纹、血型、疾病、病史和其它法律法规禁止采集的，信报上不会出现，因此信报也是张适用领域广泛的经济身份证，即便泄漏了或公开了，影响也很小，其并不含多么隐私的信息。</p>
+<p>至于民间征信机构，因为没有使用过民间的借贷产品，故我了解的不是很多。常见的民间个人征信机构有</p>
+<ul>
+<li>芝麻信用（蚂蚁金融 或者叫 花呗）</li>
+<li>小白信用（京东白条）</li>
+<li>微信支付分</li>
+<li>百行征信</li>
+</ul>
+<p>然而，对于收入、存款、有价证券、商业保险、不动产和纳税额，虽然也属于不能采集的范围，但有的征信机构会在使用协议上让你授权采集这些信息，故，民间的征信机构相比人行征信中心数据来源更多，涉及到的你的隐私也更多。话又说回来，如果不是更深入地了解你这个人，蚂蚁金服和京东金融之类的怎么敢向学生授予额度呢？</p>
+<p>个人信报只单纯记载信用卡、贷款及最近5年内的欠税、民事判决、强制执行、行政处罚、电信欠费和最近2年内的机构查询记录。根据《征信业管理条例》，个人不良信息的保存期限，自不良行为或事件终止之日起为5年，注意，不是逾期之后5年清除，而是逾期结清后5年清除。另外，按照《征信业管理条例》及人民银行的相关规定，信用卡的用卡及还款情况，包括按时还款、逾期情况（如有）等信息，每月也会报送至中国人民银行征信中心的金融信用信息基础数据库。</p>
+<p>而信报的特点是信报并不对信报个人的信用做出评价，也就是说不会出现“极好”、“良好”、“差”之类的评价性词语，也不会给个人的信用打分。</p>
+<p>还有的人会遇到信息未收录的情况，这很正常，说明此前没有发生过借贷。不存在信报的人被称作为“白户”，要想建立信报也很简单，发生某些借贷行为即可（往下看）。</p>
+<p>每个机构都有自己的评估体系和标准，且个人信报上又不含资产信息，因此，个人信报只具有参考作用，至于核卡和发放贷款依然是机构自己决定，这也能解释为什么有的人信报记录并无负面信息或是“白户”，但申请贷款依然困难。因此，“破白”也是一件挺重要的事。</p>
+<p>银行版的个人信报则更为详细，比个人信报多出身份、居住、职业信息，并对贷款、信用卡有细致得多的解读，这些信息来自于各个银行 的上报，查询你信报的其它银行也看得见。如果申请信用卡和贷款时每次填写的信息都不一样，反映在银行版的信报上就是一团糟，且还会漏出极大的破绽，以至于被会认定为信息作假。</p>
+<p>银行版信报之所以叫做银行版，就是因为其最大的作用是拿给银行审批信用卡或贷款，因此相对于个人版，会多出申请人信息校验、信用卡和贷款使用、还款情况、公积金状况等反应非即付经济活动的内容，而列出最近半年额度使用如何，则反映的是申请人的负债率。</p>
+<p>负债率与总授信度是银行较为看重的一对指标，负债和总授信过高则不适宜再发新的信用卡，发卡法人机构数太多亦然。</p>
+<h1 id="信用卡把玩姿势">信用卡把玩姿势</h1>
+<p>目前为止，可能你只是想要一张信用卡来淘些东西，而信用卡具体能干什么，为什么信用卡被称为“信用”卡，以及为何我们需要它，你可能还不太清楚，这很正常，因为我国的信用卡历史相比西方国家来说还很短暂，他们从上上个世纪就在用，而国内第一张信用卡发行已经是1989年的事情，它比我们的父母们还年轻，大多数人从未使用、甚至排斥，认为这是种超前消费，会成为财务上的负担，道理是没错，然而也要分人，菜刀拿给暴力的人也能成为杀人工具，但这是人们排斥工具的理由么？</p>
+<p>据知名数据机构尼尔森去年发布的相关数据显示：在中国18岁至29岁的年轻人群中，信贷产品渗透率达到了86.6%。其中平均每100个年轻人，有46个人会在日常生活中使用信用卡。</p>
+<p>而信用卡把玩姿势是什么？简单，只有两个，一是更好地用卡，二是发掘信用卡更大的价值。</p>
+<p>“更好地用卡”看似简单，实则不然。简单的一句话也可以无限延伸，比如，在寻常人和老司机眼中，更好的用卡就有截然不同的含义：</p>
+<ul>
+<li>在普通用户眼里，不逾期、记好账，用信用卡来均匀好未来一段时间内的现金流就是更好地用卡；</li>
+<li>在老司机看来，要用好信用卡，必然是用信用卡来牟利。无论是薅羊毛也好，TX也罢，都迫切须要管理好信用卡，因为利用信用卡牟利本身就是一个危险的举动，银行不是慈善机构，信用卡关联的个人、商户和银行之间，是零和博弈，而商户掏的手续费本质上也来自于消费者，因此，老司机看似赚银行的钱，不过是把银行从其它持卡人身上到赚的吐出来一点儿而已。</li>
+</ul>
+<figure data-type="image" tabindex="1"><img src="https://p.51credit.com/bbs/attachment/forum/app/2020/08/17/EF7F3405B79F48EF89C450E14727A056.jpg" alt="商银行AE Blue全币种国际信用卡 " loading="lazy"></figure>
+<h2 id="信用卡的作用">信用卡的作用</h2>
+<p>信用卡本质上是一个信用凭证，和房子类似，也是可以捣腾的金融工具。银行给持卡人一定的授信额度，给予其先用后付的权力，目的是刺激消费；而从持卡人的角度，信用卡最大的作用是均衡支出，让每月的现金流波动较为平缓，减小财务负担，因为人们的支出是不规律的，比如碰上过年时开支骤升，或者急切地想剁手而资金又不足，利用信用卡可以将马上要花出去的钱延迟数十天支付，还可以使用分期大法将其分摊到更长的时间。</p>
+<h2 id="把玩姿势盘点">把玩姿势盘点</h2>
+<p>目前总结的用法大概如下：</p>
+<ol>
+<li>方便自己，如海淘、认证、租车、协议支付、分期购物或充当信用凭证等；</li>
+<li>薅羊毛，如利用权益，以较为优惠的价格入住高档酒店，积分换咖啡、影券，享用机场的贵宾休息室等；</li>
+<li>资金周转，有的同学年纪同俺差不多，正准备步入社会，租房之类的都是得提前预支的大笔开销，不管是直接刷卡亦或<s>套现</s>预借现金，都能缓解不少压力；</li>
+<li>理财用途，利用免息期赚点小钱</li>
+<li>充当财产证明文件，譬如贷款、旅游签证等 <s>可参见“来台个人游申辦要项”</s></li>
+<li>记账，每个月的消费记录一清二楚</li>
+</ol>
+<h3 id="海淘">海淘</h3>
+<p>目前国内信用卡，一般分银联卡、双币信用卡、多币信用卡。</p>
+<p>银联信用卡上面只有银联图标，基本只能在国内用，国外没用（PS：目前只有美国亚马逊支持银联信用卡，其他国外购物网站几乎全都不行）。而外币信用卡，一般有MasterCard（万事达）、Visa（维萨）、JCB、美国运通（American Express，简称AE或AMEX），则可以与境外商户进行交易。</p>
+<p>国外购物网站，都会注明支持哪些支付方式。如下图visa，万事达等双币信用卡基本都可以用。其中，VISA和万事达信用卡在中国非常普及，而AE的信用卡则相对较少。AE也号称海淘好的卡。用AE下单，不怎么容易被取消订单~</p>
+<figure data-type="image" tabindex="2"><img src="https://p6.itc.cn/images01/20210804/5597ec63f6fc4df1991948afecb1c6e1.jpeg" alt="各种卡组织的图案" loading="lazy"></figure>
+<p>值得一提的是，目前由于Visa/Mastercard并未在国内建立清算中心，所以境内银行发行的Visa/Mastercard单标外币卡（即卡面上只有一种卡组织的图案，双标卡已逐渐淘汰）只能在境外商户消费。（AE在国内建了清算中心“连通公司”，所以最近发行的AE卡可以在国内消费了）</p>
+<p>注册好PayPal（海外支付宝）、Amazon（海外京东）和eBay（海外淘宝）账号即可开始海淘之旅。（不建议把卡直接绑在不知名的商户上，容易被盗刷）</p>
+<h3 id="信用凭证">信用凭证</h3>
+<p>共享自行车、充电宝等：通过绑定信用卡可以提高蚂蚁信用，进而享受到支付宝的便利服务（共享单车免押金等等）<br>
+租车：神州租车绑定信用卡只需要付租车和服务费，还车时自己把油加回租来时的水平就行啦<br>
+酒店押金、租赁押金：在缴纳押金时使用POS刷一笔<a href="https://baike.baidu.com/item/%E9%A2%84%E6%8E%88%E6%9D%83/8566275">预授权</a>，就不需要自己掏钱垫着啦。</p>
+<h3 id="分期购物">分期购物</h3>
+<p>对于免息而手里又负担得起这笔消费的朋友，可以参考下面的“资金周转与理财”章节，把钱丢进低风险的理财产品赚利息。<br>
+对于负担不起而又想超前消费的朋友，建议早点销卡。</p>
+<h3 id="薅羊毛技巧">薅羊毛技巧</h3>
+<p>信用卡的权益和信用卡的种类及级别挂钩，最常见的就是联名卡，在合作商户那里享有特殊优惠，累计更多的积分等。</p>
+<p>不仅如此，信用卡无论有没有额度，都可以参加银行的活动，享受某些权益，因而还可以通过优惠券、折扣、刷卡金返还等抵扣，优惠资讯要么在App上看，要么关注银行的微信号，或者注意信用卡中心发送的短信，总之，机会很多，因为信用卡本来就是银行与商家合作的营销工具，他们会想方设法刺激你消费。</p>
+<p>信用卡的权益和信用卡的种类及级别挂钩，最常见的就是联名卡，在合作商户那里享有特殊优惠，累计更多的积分等。<br>
+其次是卡片自带的权益，和银行推出的活动不同，是一激活就有、长期有效且附属卡也能享受的，比如中信返利卡，消费就能返还一定比例，又比如平安银行的金卡，自身就附带有燃气险、意外险、医疗保障。<br>
+最后则是高端卡片才有的，如道路救援，机场和高铁的贵宾休息室，私人助理服务等。</p>
+<h3 id="资金周转与理财">资金周转与理财</h3>
+<p>这里要说明的是，还款日是相对账单日的一个概念，只有在账单日确定的情况下，还款日才能被确定下来。比如：</p>
+<ul>
+<li>招商银行的信用卡还款日是在账单日后推18天，8号是账单日的话，那么还款日就是26号，则最长免息期，以31天的大月来计算，有50天。</li>
+<li>工商银行的信用卡账单日是在账单日后推24天，1号是账单日的话，那么还款日就是25号，则最长免息期有56天。</li>
+</ul>
+<p>超过还款日才还钱被视为逾期还款，但由于中国银行业协会《中国银行卡行业自律公约》要求签署银行为信用卡持卡人提供“容时容差”服务，真正的最后还款期限，根据各行各自执行的标准，会在还款日的基础上再延长2-9天，这段容差时间被称之为“宽限期”，在宽限期内还款仍被视作正常还款，不会产生逾期罚息和信报逾期记录。至于容差还款，是指差点还清的情况下，如少还了几块钱，依然被视为全额还款，但由于并非所有银行均提供了容差还款服务，建议全还，而外币账单，考虑到汇率波动，稳健一些还要多还，避免因未足额还款产生高额的罚息！</p>
+<p>目前，宽限期最短的银行可能是农行，其人民币还款的宽限期仅有2天；原本没有宽限期的工行，2017年以后新推出的卡种基本已经增加了3天的宽限期。而享受宽限期最长的可能是中行白金卡，足有9天时间。其余大部分银行的宽限期均在3天。</p>
+<p>值得注意的是，由于部分银行外币还款入账可能比人民币慢1天，以农行为例，虽然人民币的宽限期有2天，但考虑到入账时间，外币的宽限期仅仅1天而已！</p>
+<p><strong>有了这几十天的免息期，我们可以这样玩：</strong></p>
+<ol>
+<li>如果你准备消费，且你本身负担得起这笔消费，你可以使用信用卡付款，不仅可以赚取积分，还能将手中的现金存入理财产品（余额宝、零钱通）通过这几十天的免息期赚取利息</li>
+<li>公款消费先刷信用卡，等待报销后还款，平稳了现金流。</li>
+</ol>
+<p>为了充分享受信用卡免息期带来的收益，老司机通常不会提前还款，必然在还款日到来才还。而记性不好的家伙，建议把银行的提醒功能都打开。</p>
+<h3 id="充当财产证明文件">充当财产证明文件</h3>
+<p>1.签证审批<br>
+2.贷款审批（在银行眼里，良好的信用卡使用记录和额度是加分项，白户和逾期记录则是大大的减分项）</p>
+<h2 id="用卡忌讳">用卡忌讳</h2>
+<h3 id="信用卡逾期">信用卡逾期</h3>
+<p>信用卡逾期是种紧急情况，俺一直提倡诚实守信，但人总会有点意外，如转账延迟、生病住院或者灾祸，总之就是不能如期把钱给还上，这种情况会带来几个后果：</p>
+<p>首先是逾期产生的利息，因为一旦发生这种情况，本来享有的几十天免息期就没了，利息从交易发生日开始计算，然后还有一笔滞纳金，每月累积；</p>
+<p>其次是卡片受限和上报人行征信中心，逾期也有程度之分，几天十几天的逾期，还清后不一定会上信报，只会影响银行对你的评估，然后是超过30天的逾期，发生一次，未来的商业贷款会受影响，比如利率会提高。超过90天的逾期是严重逾期，此后申请其它信用卡和贷款会被拒；<strong>金额巨大且恶意拖欠的，是犯罪行为</strong>。</p>
+<p>如果清楚自己会产生逾期，最好提前向银行申请延期还款，或者还最低，这样虽然会产生额外的利息，但不至于产生不良后果。逾期后，可以致电银行陈述原因并表露还款的意愿（这点十分重要），协商还款。</p>
+<p>逾期产生的信报不良记录，清偿后5年消除。如果卡还能用，则继续用，不要忙着注销，让新的正常用卡记录覆盖以前的不良记录。</p>
+<p>不过，既然了解了宽限期，又知晓了信用卡账户不同导致的还款方式差异，这里还要告诉你一些好消息：</p>
+<p>商业银行，如招行、光大、交行等等有一些未写明的潜规则，即便超过了宽限期，只是会产生罚息而已，真正逾期记录报送至征信中心的最后期限是下一个账单日！</p>
+<p>比如，光大银行的信用卡账单日是1号，最后还款日是20号，宽限期截至23号，但只要在下个月1号之前还清，那么个人信用报告上依然不会有逾期记录。</p>
+<p>根据信报中心信用记录谁上传谁负责的原则，其实任何一家具有报送资质的银行都享有撤销逾期记录的权限，只不过大部分银行不愿意这么做而已。</p>
+<h3 id="借给他人使用">借给他人使用</h3>
+<p>倘若给近亲用那倒没什么，但如果给男女朋友、同学、同事之类的没有连带偿还责任与义务的人用，则是别人消费你买单的大坑。银行收到信用卡申请，审核时是对你的消费、偿还能力进行审核，不是对别人，把信用卡借给他人用，用银行的话来说叫“私自改变授信方”，属于违约行为，因此不会因为是别人用你的卡就不让你清偿。</p>
+<h3 id="低劣的套现姿势">低劣的套现姿势</h3>
+<p>啧啧啧 这玩意直接违规了 不用解释了</p>
+<h3 id="没钱还款">没钱还款</h3>
+<p>下面说下最严重的情况，当没有钱还清信用卡欠款时怎么办。首先说下最常见的办法：</p>
+<p>在出账之前，修改账单日，再争取一个月的时间。比如，账单日是明天，致电客服将账单日修改到昨天，这样要等到下个月才会出账，还款日当然也就顺延了。然而，并非每家银行都允许这么操作，且账单日无法修改到月底，一般是[1,28]区间内的一个日子。</p>
+<p>账单分期，分多少期就看自己的还款能力了，分得越久越不划算，所给的利息越多，但压力就越小。</p>
+<p>延期还款，致电客服申请即可，需要按天算利息，部分银行可能要求必须先还一部分。</p>
+<p>最低还款，非常不划算，宁愿分期也别换最低，因为最低还款会按天算利息，年化利率高于分期。</p>
+<p>最后一个没办法的办法是：寻求父母。</p>
+<h1 id="总结">总结</h1>
+<p><strong>不要超前消费，不要超前消费，不要超前消费</strong> 重要的事情说三遍。（当然确保自己能还上，即在自己消费能力内的消费不算超前消费）</p>
+<p>为了最大限度享受免息期，没有必要提前还清。</p>
+<p>量入为出，适度消费，养成良好的消费习惯、记账习惯（私以为是良好消费观养成的关键）和自食其力这两个核心，从防止深陷债务泥潭。切勿逞强，因小失大，生活回到正轨最重要。</p>
+<p>本文所讲的只针对信用卡，不适用于银行贷款，通常来说贷款没有宽限期。</p>
+]]></content>
+    </entry>
+    <entry>
+        <title type="html"><![CDATA[语录收藏]]></title>
+        <id>https://markdeia.github.io/post/quotations-collection/</id>
+        <link href="https://markdeia.github.io/post/quotations-collection/">
+        </link>
+        <updated>2022-01-07T19:23:52.000Z</updated>
+        <content type="html"><![CDATA[<p>突发奇想，想着收录自己脑子里冒出来的一些话。</p>
+<ul>
+<li>妥协只有0次和无数次</li>
+<li>当你对自己的专业水平不自信的时候，请去向更有水平的专业人士请教，而不是向你的领导请教。</li>
+<li>少而好学，如日出之阳；壮而好学，如日中之光；老而好学，如炳烛之明，炳烛之明，孰与昧行乎？</li>
+<li>生于希望，陷于欲望，死于梦想，醒于绝望。</li>
+<li>天平想要摆正，两边的砝码就得相同。</li>
+<li>自从哲学对科学问出了那一句自我毁灭的话之后，很少有人再用哲学来去探讨科学了。——“宇宙为什么会存在？”</li>
+<li>热爱自己造神的是我们，毁“神”最最狠的也是我们。人人都做着皮克特式的冲锋，陷入了精神自我分裂的罗生门。</li>
+<li>“我绝不是种族歧视者，且极其厌恶种族歧视，和极其厌恶黑人一样。”</li>
+<li>退出账号，首页依旧是唱啊跳啊吃啊喝啊美女直播，没有人真正关注现实，一切都还是原来的样子。</li>
+<li>历史总是陷入矛盾：耻辱不义的开端有时会发展成丰厚激荡的历程，看似光明热血的始创却走向残忍与欺诈。</li>
+<li>好的教育是不放弃每一个人，社会发展需要拔尖人才的引领，与普通人们的共同努力。</li>
+<li>春夏秋冬是自然界的规律，没有冬天的四季是不完整的。</li>
+<li>抗争需要付出代价。如果维权的代价大到多数人宁愿忍受不公，那么一定是我们的法律运行出了问题。</li>
+<li>One thing I learned in college was that any class where they had us arrange our seats in a circle was a class whose subject matter would turn out to be nonsense.</li>
+<li>已经集中起来的权力不会由于创造它的那些人的良好愿望而变为无害。--弗里德曼</li>
+<li>简洁是智慧的灵魂，冗长是肤浅的藻饰 --莎士比亚</li>
+<li>西人党扫东人党的黑，东人党除西人党的恶。</li>
+<li>不要想着有一份稳定的工作,而是有让生活稳定的本事。</li>
+<li>&quot;文明&quot;一直在进步，我却一直在退步。</li>
+<li>流水线上的量产品迟早退场。</li>
+<li>Have a little faith in me, fellas.</li>
+<li>鱼的记忆只有7秒，中国网民的记忆有多少秒？</li>
+<li>拉喀索夫教授，若你想暗示，苏联政府应为事故负责，我就必须郑重警告你，你现在危在旦夕。</li>
+<li>靠杀人越货发家的人，之后做再多的善事也洗脱不了他的罪恶。他只是想漂白自己的身份，回归正常人的生活，并不真正是良心发现。</li>
+<li>活了一百年却只能记住30M字节是荒谬的。你知道，这比一张压缩盘还要少。人类境况正在变得日趋退。--Marvin Minsky</li>
+<li>花代价所换来的一点才智，抵过别人传授的数倍不止。</li>
+<li>心比天高，命比纸薄。</li>
+<li>经济寒冬，谨慎剁手，钱要用在刀刃上。</li>
+<li>今而思之，如痛定之人，思当痛之时，不知何能自处也。</li>
+<li>如果批评不自由，则赞美无意义。</li>
+<li>不合理的消费会使人短时间的快乐，长时间的痛苦。</li>
+<li>开始总是分分钟都妙不可言，谁都以为热情它永不会减。</li>
+<li>我尊重你们小众的爱好，但是你们企图将这些推给多数人的时候，实际是对多数人的冒犯。</li>
+<li>帝国的疆域确实很大,但没有一寸是多余的。</li>
+<li>我们已经给出了真相，而你知道该如何选择！</li>
+</ul>
+]]></content>
+    </entry>
+    <entry>
+        <title type="html"><![CDATA[我的2021总结]]></title>
+        <id>https://markdeia.github.io/post/my-2021-summary/</id>
+        <link href="https://markdeia.github.io/post/my-2021-summary/">
+        </link>
+        <updated>2021-12-30T09:41:42.000Z</updated>
+        <summary type="html"><![CDATA[<p>终于提前放假，结束了👏👏👏<br>
+2021总结为一句话：混乱中按部就班。<br>
+思考如何写下2021的总结的时候，又不知道该如何表达了，就按以前的套路（干货放前面 废话放后面 ）来吧~</p>
+]]></summary>
+        <content type="html"><![CDATA[<p>终于提前放假，结束了👏👏👏<br>
+2021总结为一句话：混乱中按部就班。<br>
+思考如何写下2021的总结的时候，又不知道该如何表达了，就按以前的套路（干货放前面 废话放后面 ）来吧~</p>
+<!-- more -->
+<hr>
+<h2 id="好物盘点">好物盘点</h2>
+<h3 id="数码产品">数码产品</h3>
+<ul>
+<li>ASUS ROG 幻14 （120Hz 1660Ti款）</li>
+<li>Apple 移动系列全家桶(Watch、iPhone、iPad Pro、Apple Pencil、AirPods Pro、<s>MacBook Pro</s>）</li>
+<li>RAVPOWER 雷电3 拓展坞</li>
+<li>手持吸尘器</li>
+<li>IKBC F87（C87的Win+Mac升级版）</li>
+<li>65W、105W的 氮化镓（GAN）充电器</li>
+<li>Redmi K40 12+256</li>
+<li>奥睿科ORICO SATA3 to USB type-C 硬盘盒</li>
+<li>绿联UGREEN 1w mAh的充电宝（支持PD，最大功率18w 主要是轻巧不占空间）</li>
+<li>很多无线充电板</li>
+</ul>
+<h3 id="吃的喝的">吃的喝的</h3>
+<ul>
+<li>散利痛（复方对乙酰氨基酚片(Ⅱ)） 拜耳制药</li>
+<li>布洛芬缓释胶囊</li>
+<li>100ml 医用酒精 x10 <s>（好像不是用来喝的？）</s></li>
+<li>茶里蜜桃乌龙茶</li>
+<li>可口可乐原味 可口可乐香草味 <s>可口可乐零度是可乐？</s></li>
+<li>徐福记 凤梨酥</li>
+<li>三只松鼠 各种玩意 （山楂片猪肉脯肉松饼还可以 手撕面包就算了）</li>
+<li></li>
+</ul>
+<h3 id="日用品">日用品</h3>
+<ul>
+<li>很多双比自己码数大几码的拖鞋</li>
+<li>脏衣篮（脏衣袋属实不好用）</li>
+<li>一把自动伞（经常被借来的伞夹手）</li>
+<li>笔记本电脑支架</li>
+<li>一个有靠背的转椅（最好有头枕 可惜当时没想到）</li>
+<li>保温杯（当然是喝冷冻可乐用）</li>
+<li>Tempo德宝 纸巾</li>
+<li>榄菊 电热蚊香</li>
+</ul>
+<p><strong>暂时就想到这么多啦 推荐的程度由上到下</strong></p>
+<hr>
+<h2 id="经济策略">经济策略</h2>
+<h3 id="投资篇">投资篇</h3>
+<p>先放结论：贯穿2021，只有长线投资能勉强获利，短线投资亏得裤穿窿。<br>
+基金配置：大成纳斯达克100(QDII) 10元<br>
+股票配置：无<br>
+我分享下个人之拙见：疫情期间经济不会好看，是时候成为风险厌恶型，把闲钱全部放进余额宝/零钱通。<br>
+为学须有本原,须从本原上用力,渐渐盈科而进。</p>
+<h3 id="开销篇">开销篇</h3>
+<p>学杂费+生活费+交通费占了大头<br>
+假期期间发了点小财，给自己添置了点数码设备，剩下的在年底给父母买保险和手机了。</p>
+<h3 id="保险篇">保险篇</h3>
+<p>先放结论：全国医保 + 惠民保 + 商业保险 + 相互宝</p>
+<ol>
+<li>
+<p>全国性医保<br>
+门槛：每个月参与社保缴纳就有，<br>
+费用：有工作的你跟公司三七分成交，没工作的必须当地户籍然后上社保局网站自行缴纳<br>
+兜底：地方政府 + 中央政府<br>
+优势：这个优势只在外来人口很多的城市才有优势，因为外来人口多的城市医保资金非常充裕，比如深圳推出全国绝无仅有的少儿医保，有生育保险的户籍居民顺产可能自费只需1000元左右，同时深圳社保局承担女性产假工资。相对财政不充裕的城市，只能维持基本的最低医保水平。</p>
+</li>
+<li>
+<p>惠民保<br>
+由地方政府牵头保险公司专门为当地居民定制的一种商业医疗保险。<br>
+这个是中央政府要求地方政府为居民投保做出指导性一种政策落地，最早也是深圳开始推出39元那个重疾险，后来全国开始学习<br>
+门槛：必须是当地社保和医保缴纳居民，支持带病入保<br>
+费用：低廉，比商业保险便宜的没根儿，几乎是政府指导价……30-300元/年左右，但是保障的疾病范围极广，赔付额极高<br>
+兜底：除了保险公司兜底以外，实际观察中发现地方政府在参与进行指导，所以保险公司在惠民保上作妖的可能性不大（相对纯商业保险）。<br>
+优势：价格低，额度高，并且是当地政府牵头……有一定程度保障力度，深圳的惠民保是无上限赔付额<br>
+缺点：报销比例跟地方财政几乎直接挂钩，虽然很多地方都有这个惠民保，但是报销比例却差异绝大，深圳几乎100%报销，但是其它城市差异很大。<br>
+找了一张全国惠民保的图表，会放在最后给大家参考。</p>
+</li>
+<li>
+<p>商业保险<br>
+门槛：砸钱<br>
+费用：砸钱<br>
+兜底：保险公司 + 银保监会<br>
+优势：意外险、电梯险、猝死险、理财险、年金险、商业养老险等，在这些方面商业险有绝对的优势作为补充。<br>
+个人不建议购买纯商业医疗保险，目前来看 地方惠民险 + 医保 是最靠谱的医疗保险组合。</p>
+</li>
+<li>
+<p><s>相互宝（废了）<br>
+相互宝其实就是互助类产品。在人类社会没有产生保险这个东西之前，就都是使用互助方式在保障自身权益的,相互宝实际上就是保险的前身.<br>
+这个交得起就交，嫌贵当然也可以不交。</s></p>
+</li>
+<li>
+<p>提一嘴美国的保险<br>
+美国的商业保险跟我们国家不一样，属于严入宽出，入门门槛较高，赔付比较容易，但是保险公司核查也非常严格。<br>
+正经上班族都是公司缴纳商业医疗保险 + 美国政府强制的401K（类似我们的养老金）<br>
+美国的低收入、失业阶层只能依赖奥巴马医保，他们确实买不起商业保险，太鸡儿贵了。</p>
+</li>
+</ol>
+<p>结论：全国医保 + 地方惠民保 + 部分商业保险 + 相互宝（就当回馈社会）<br>
+没钱就选前两者，有钱四个都上。<br>
+切记一切以条款为准，注意是长期还是短期（选可续保的）我们国家商业保险只是补充类保险，主体还是国家指导为主。<br>
+早预防，居安思危、有备无患</p>
+<h2 id="2021生活与感想">2021生活与感想</h2>
+<p>今年，是平平淡淡的一年，我也想不到有啥能说的，哈哈哈，啥都没做就是一直在花钱。<br>
+学业上......该考的该学的都安排上了，物理课程也永远的结束了，除了驾照这个心头之患，考的其他证都拿到手了。想买的东西，在2021年的最后十几个小时里也都买到手了（钱也花的一干二净）。希望2022能继续和几个傻仔一起当中东悍匪哈哈哈哈。</p>
+<p>今年，最喜欢的就是自己亲手组建起来的电子设备生态（全家桶），在生活中的许多方面都给自己带来了无限便利，虽然也砸进去了不少钱，但我仍希望这套生态能够继续源源不断地为我带来便利与惊喜。</p>
+<p>今年，遇到了很多颠覆三观的事，得到的收获和教训分享给大家：</p>
+<ol>
+<li>不论如何，请一定坚持底线。一退再退终将步入深渊，一句话送给大家“明明说好的三年，三年之后又三年，都他妈快十年了……”——梁朝伟</li>
+<li>拥有鉴别真相的能力，和自己的一套价值评价体系。人最重要的是独立自主的思考能力，不要被世俗和教条蒙蔽。而在这其中，寻找可靠的证据支撑是必不可少的。</li>
+<li>少点争辩，三观不合，永远不会是一路人。同声相应，同气相求，道不同，不相为谋，亦各从其志也。滥辩是愚蠢的。</li>
+</ol>
+<p>寒夜渐深，2021也将要和我作别了，今年是从旧到新的一年，这一年，我从迷茫到确定了方向，从曾经的懊悔到抬头向前看，一点一滴无不透露了自己的变化。2021年的最后一天是值得纪念的，新的一年也是值得期待的，愿所有人都平安喜乐，满怀热情。在此列下<mark>我的2022目标清单</mark>，希望来年一切都好。</p>
+<ul>
+<li>不换手机</li>
+<li>考完驾照</li>
+<li>如果可以，确定工作的地区</li>
+<li>开心</li>
+<li>早睡</li>
+<li>增重</li>
+<li>找女朋友（随缘）</li>
+<li>拿到新护照，去北朝鲜（遥遥无期）</li>
+<li>继续学习法语</li>
+</ul>
+]]></content>
+    </entry>
+</feed>
